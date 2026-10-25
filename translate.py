@@ -9,30 +9,42 @@ Examples:
     python translate.py https://github.com/facebook/react
     python translate.py --desc "A declarative UI library"
     python translate.py facebook/react --json
+
+Optional environment variable:
+    GITHUB_TOKEN=<your token>   # raises GitHub API rate limits (60/h -> 5000/h)
 """
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
 GITHUB_API = "https://api.github.com/repos/"
-TRANSLATE_API = "https://translate.googleapis.com/translate_a/single"
+GOOGLE_API = "https://translate.googleapis.com/translate_a/single"
+MYMEMORY_API = "https://api.mymemory.translated.net/get"
 USER_AGENT = "gh-repo-desc-translator/1.0"
+
+
+def http_get_json(url: str, headers: dict | None = None):
+    """GET a URL and parse the JSON response."""
+    request = urllib.request.Request(
+        url, headers=headers or {"User-Agent": USER_AGENT}
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def fetch_repo_description(repo: str) -> str:
     """Fetch the description of a GitHub repository via the public API."""
-    url = GITHUB_API + repo.strip("/")
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
-    )
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        data = http_get_json(GITHUB_API + repo.strip("/"), headers)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
             sys.exit(f"[error] Repository not found: {repo}")
@@ -46,17 +58,38 @@ def fetch_repo_description(repo: str) -> str:
     return description
 
 
-def translate(text: str, target: str) -> str:
-    """Translate text to the target language via the free Google translate endpoint."""
+def translate_google(text: str, target: str) -> str:
+    """Translate via the free Google translate endpoint (no API key)."""
     params = {"client": "gtx", "sl": "auto", "tl": target, "dt": "t", "q": text}
-    url = TRANSLATE_API + "?" + urllib.parse.urlencode(params)
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(request, timeout=15) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.URLError as exc:
-        sys.exit(f"[error] Translation request failed: {exc.reason}")
+    url = GOOGLE_API + "?" + urllib.parse.urlencode(params)
+    data = http_get_json(url)
     return "".join(part[0] for part in data[0] if part and part[0])
+
+
+def translate_mymemory(text: str, target: str) -> str:
+    """Translate via the MyMemory free API (no API key, ~500 chars/request)."""
+    params = {"q": text, "langpair": f"en|{target}"}
+    url = MYMEMORY_API + "?" + urllib.parse.urlencode(params)
+    data = http_get_json(url)
+    if data.get("responseStatus") != 200:
+        raise RuntimeError(f"MyMemory error: {data.get('responseDetails')}")
+    translated = data.get("responseData", {}).get("translatedText", "")
+    for line in translated.split("\n"):
+        if "MYMEMORY WARNING" in line:
+            continue  # skip the free-tier watermark line
+        return line.strip()
+    return translated.strip()
+
+
+def translate(text: str, target: str, engine: str) -> str:
+    """Translate text with the chosen engine; 'auto' falls back on failure."""
+    if engine in ("auto", "google"):
+        try:
+            return translate_google(text, target)
+        except Exception:
+            if engine == "google":
+                raise
+    return translate_mymemory(text, target)
 
 
 def parse_repo(value: str) -> str:
@@ -87,6 +120,12 @@ def main() -> None:
         "--desc",
         help="Translate a description text directly instead of fetching from GitHub",
     )
+    parser.add_argument(
+        "--engine",
+        choices=["auto", "google", "mymemory"],
+        default="auto",
+        help="Translation engine: auto (google first, fallback mymemory), google, or mymemory",
+    )
     parser.add_argument("--json", action="store_true", help="Output results as JSON")
     args = parser.parse_args()
 
@@ -95,8 +134,13 @@ def main() -> None:
     if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
         sys.stdout.reconfigure(encoding="utf-8")
 
-    zh_cn = translate(text, "zh-CN")
-    zh_tw = translate(text, "zh-TW")
+    try:
+        zh_cn = translate(text, "zh-CN", args.engine)
+        zh_tw = translate(text, "zh-TW", args.engine)
+    except urllib.error.URLError as exc:
+        sys.exit(f"[error] Translation request failed: {exc.reason}")
+    except Exception as exc:
+        sys.exit(f"[error] Translation failed: {exc}")
 
     if args.json:
         print(

@@ -24,9 +24,14 @@ python translate.py https://github.com/facebook/react
 # 直接翻译一段文字（不抓取仓库）
 python translate.py --desc "A declarative UI library"
 
+# 指定翻译引擎（默认 auto：Google 优先，失败自动回退 MyMemory）
+python translate.py --engine mymemory facebook/react
+
 # JSON 输出（方便脚本调用）
 python translate.py facebook/react --json
 ```
+
+> 提示：如遇到 GitHub API 限流（未登录 60 次/小时），可设置环境变量 `GITHUB_TOKEN=<token>` 提升到 5000 次/小时。
 
 示例输出：
 
@@ -44,7 +49,7 @@ Original (EN): A declarative, efficient, and flexible JavaScript library for bui
 
 | 版本 | 翻译接口 | 是否需要 API Key |
 | --- | --- | --- |
-| CLI（translate.py） | Google 免费翻译端点 | 否（有频率限制，适合日常小量使用） |
+| CLI（translate.py） | Google 免费翻译端点（默认，`--engine google`），失败自动回退 MyMemory（`--engine mymemory` / `--engine auto`） | 否（免费接口有频率限制，适合日常小量使用） |
 | Web（index.html） | MyMemory 免费翻译 API | 否（匿名每日有限额） |
 
 ## 目录结构
